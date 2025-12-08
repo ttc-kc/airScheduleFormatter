@@ -6,10 +6,10 @@ with open('json/classMap.json', 'r') as f:
 	CABIN_CLASS_MAPPING = json.load(f)
 
 with open('json/airlines.json', 'r') as f:
-    airlines = json.load(f)
+	airlines = json.load(f)
 
 with open('json/airport_codes.json', 'r') as f:
-    airport_codes = json.load(f)
+	airport_codes = json.load(f)
 
 current_year = datetime.now().year
 
@@ -162,7 +162,7 @@ def clear_text():
 	st.session_state.widget = ""
 	
 with col1:
-	sked_source = st.selectbox(label='Schedule Source - Where did you get your schedule from?',options=['Tropics', 'Air Department', 'AMADEUS'], placeholder='Tropics', help="Selection dictates how the schedule gets parsed")
+	sked_source = st.selectbox(label='Schedule Source - Where did you get your schedule from?',options=['Tropics', 'Air Department', 'AMADEUS','AMADEUS - UNCONFIRMED'], placeholder='Tropics', help="Selection dictates how the schedule gets parsed")
 	if sked_source == 'AMADEUS':
 		GETflag = st.checkbox('__Grand European Schedule__')
 	st.markdown(
@@ -436,6 +436,145 @@ def format_amadeus(text, get_flag):
 	df['Operating Airlines'] = df['Operating Airlines'].apply(lambda x: airlines.get(x, x))
 	return df
 
+def format_amadeus_unconfirmed(text):
+	amadeus_pattern = r"^\s*(\d{1,2})\s+([A-Z]{2}\s?\d{1,5})\s+([A-Z])\s+(\d{2}[A-Z]{3})\s+(\d+\*?)?\s*([A-Z0-9]{6})\s+([A-Z]{2}\d)\s+(\d{4})\s+(\d{4})\s+(\d{2}[A-Z]{3})\s+([A-Z])\s+([A-Z0-9]+)\s+([A-Z0-9]{2,3})?\s*([A-Z]{1,2})?\s*$"
+	
+	lines = text.strip().split("\n")
+
+	filtered_lines = []
+	for line in lines:
+		# Check if line matches the pattern
+		if re.match(amadeus_pattern, line):
+			filtered_lines.append(line)
+		# Or if it starts with "OPERATED BY" and doesn't contain "SUBSIDIARY/FRANCHISE"
+		elif line.strip().startswith("OPERATED BY") and "SUBSIDIARY/FRANCHISE" not in line:
+			filtered_lines.append(line)
+		
+	schedule = []
+	operating_airline = None
+
+	for line in filtered_lines:
+		if "OPERATED BY" in line:
+			operating_airline = line.strip().replace("OPERATED BY ", "")
+			# Apply to the last flight added to schedule
+			if schedule:
+				# Update the last flight's operating airline
+				last_flight = list(schedule[-1])
+				last_flight[11] = operating_airline  # Index 11 is Operating Airlines
+				schedule[-1] = tuple(last_flight)
+			continue
+		
+		match = re.match(amadeus_pattern, line)
+		if match:
+			segment_num, flight_no, bkg_class, dep_date, day_indicator, route, status, dep_time, arr_time, arr_date, eticket, zero, fare_basis, letters = match.groups()
+			
+			# Remove whitespace from flight number
+			flight_no = flight_no.replace(' ','')
+			
+			# Extract origin and destination from the 6-letter route code
+			origin = route[:3]
+			destination = route[3:]
+			
+			current_date = datetime.now()
+			current_year = datetime.now().year
+
+			# Try with current year first
+			dep_date_obj = datetime.strptime(f"{dep_date}{current_year}", "%d%b%Y")
+			
+			if dep_date_obj < current_date:
+				dep_date_obj = datetime.strptime(f"{dep_date}{current_year + 1}", "%d%b%Y")
+			
+			arr_date_obj = datetime.strptime(f"{arr_date}{current_year}", "%d%b%Y")
+			
+			if arr_date_obj < current_date:
+				arr_date_obj = datetime.strptime(f"{arr_date}{current_year + 1}", "%d%b%Y")
+
+			# Format dates
+			dep_date_formatted = dep_date_obj.strftime("%d-%b-%Y")
+			arr_date_formatted = arr_date_obj.strftime("%d-%b-%Y")
+
+			# Format times from HHMM to HH:MM
+			dep_time_formatted = f"{dep_time[:2]}:{dep_time[2:]}"
+			arr_time_formatted = f"{arr_time[:2]}:{arr_time[2:]}" 
+			
+			# Determine cabin class from booking class (you may need to adjust this logic)
+			cabin_class = get_cabin_class(flight_no[:2], bkg_class)
+			
+			flight_info = (
+				flight_no,
+				bkg_class,
+				origin,
+				destination,
+				dep_date_formatted,
+				dep_time_formatted,
+				arr_date_formatted,
+				arr_time_formatted,
+				cabin_class,
+				"non stop",
+				"",
+				flight_no[:2]  # Default to airline code
+			)
+			schedule.append(flight_info)
+			operating_airline = None  # Reset after use
+	
+	df = pd.DataFrame(schedule, columns=[
+		'Flight No',
+		'Bkg Class',
+		'From',
+		'To',
+		'Dep Date',
+		'Dep Time',
+		'Arr Date',
+		'Arr Time',
+		'Cabin Class', 
+		'Transit Stops',
+		'Layover Time',
+		'Operating Airlines'])
+	
+	df['Airline'] = df['Flight No'].astype(str).str[:2]
+	df['Flight Number'] = df['Flight No'].astype(str).str[2:]
+	df['DepDate'] = pd.to_datetime(df['Dep Date'], format='%d-%b-%Y')
+	df['ArrDate'] = pd.to_datetime(df['Arr Date'], format='%d-%b-%Y')
+	
+	# Calculate layover times between consecutive flights
+	for index in range(len(df) - 1):
+		current_arrival = pd.to_datetime(df.at[index, 'Arr Date'] + ' ' + df.at[index, 'Arr Time'])
+		next_departure = pd.to_datetime(df.at[index + 1, 'Dep Date'] + ' ' + df.at[index + 1, 'Dep Time'])
+		
+		time_diff = next_departure - current_arrival
+		
+		# If layover is more than 24 hours, it's likely a separate trip segment
+		if time_diff > pd.Timedelta(days=1):
+			df.at[index, 'Layover Time'] = ''
+		else:
+			# Format layover time as "Xh Ym"
+			hours = int(time_diff.total_seconds() // 3600)
+			minutes = int((time_diff.total_seconds() % 3600) // 60)
+			if hours > 0:
+				df.at[index, 'Layover Time'] = f"{hours}h {minutes}m"
+			else:
+				df.at[index, 'Layover Time'] = f"{minutes}m"
+	
+	df.at[len(df) - 1, 'Layover Time'] = ''  # Last flight has no layover
+	
+	column_order = [
+		'Flight No',
+		'Airline',
+		'Flight Number',
+		'From',
+		'Dep Date',
+		'Dep Time',
+		'To',
+		'Arr Date',
+		'Arr Time',
+		'Cabin Class', 
+		'Transit Stops',
+		'Layover Time',
+		'Operating Airlines']
+	df = df[column_order]
+	df['Operating Airlines'] = df['Operating Airlines'].apply(lambda x: airlines.get(x, x))
+	return df
+
 def generate_script(df):
 	script = ""
 	previous_segment_date = None
@@ -490,6 +629,13 @@ if format and data:
 	if sked_source == 'AMADEUS':
 		try:
 			schedule = format_amadeus(data, get_flag=GETflag)
+		except Exception as e:
+			with col3:
+				st.warning(f"Something went wrong while trying to parse flights:\n\n{e}")
+				st.stop()
+	if sked_source == 'AMADEUS - UNCONFIRMED':
+		try:
+			schedule = format_amadeus_unconfirmed(data)
 		except Exception as e:
 			with col3:
 				st.warning(f"Something went wrong while trying to parse flights:\n\n{e}")
