@@ -312,7 +312,7 @@ def format_amadeus(text, get_flag):
 		# regex pattern for GET Schedules
 		amadeus_pattern = r'^\s*(\d{1,2})\s+([A-Za-z]{2}\s?\d{1,5})\s+([A-Za-z])\s+(\d{2}[A-Z]{3})\s+(\d\*)?([A-Z]{6})\s+([A-Z]{2}\d)\s+(\d{1,4}[AP])\s?(\d{1,4}[AP])\s+(\d{2}[A-Z]{3})\s+([A-Z])\s+([A-Z]{2})/([A-Z0-9]+)\s*$'
 	else:
-		amadeus_pattern = r'^\s*(\d{1,2})\s+([A-Za-z]{2}\s?\d{1,5})\s+([A-Za-z])\s+(\d{2}[A-Z]{3})\s+(\d\*)?([A-Z]{6})\s+([A-Z]{2}\d)\s+(\d{4})\s+(\d{4})\s+(\d{2}[A-Z]{3})\s+([A-Z])\s+([A-Z]{2})/([A-Z0-9]+)\s*$'
+		amadeus_pattern = r'^\s*(\d{1,2})\s+([A-Za-z]{2}\s?\d{1,5})\s+([A-Za-z])\s+(\d{2}[A-Z]{3})\s+(\d[ *])?([A-Z]{6})\s+([A-Z]{2}\d)\s+(\d{4})\s+(\d{4})\s+(\d{2}[A-Z]{3})\s+([A-Z])\s+([A-Z]{2})/([A-Z0-9]+)\s*$'
 	
 	lines = text.strip().split("\n")
 	schedule = []
